@@ -35,7 +35,8 @@ const LANGUAGES = [
   { code: "fr", name: "French", flag: "🇫🇷", channel: "announcements-french" },
   { code: "de", name: "German", flag: "🇩🇪", channel: "announcements-german" },
   { code: "pt", name: "Portuguese", flag: "🇵🇹", channel: "announcements-portuguese" },
-  { code: "pl", name: "Polish", flag: "🇵🇱", channel: "announcements-polish" }
+  { code: "pl", name: "Polish", flag: "🇵🇱", channel: "announcements-polish" },
+  { code: "nl", name: "Dutch", flag: "🇳🇱", channel: "announcements-dutch" }
 ];
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -272,6 +273,40 @@ async function publishAnnouncement(guild, originalText) {
   return results;
 }
 
+
+// Publish to one selected language only, without sending to every language channel.
+async function publishSingleLanguage(guild, languageCode, originalText) {
+  await guild.channels.fetch();
+  const language = LANGUAGES.find(item => item.code === languageCode);
+  if (!language) throw new Error("That language is not configured.");
+
+  const channel = guild.channels.cache.find(item =>
+    item.type === ChannelType.GuildText && item.name === language.channel
+  );
+  if (!channel) {
+    throw new Error(`Missing #${language.channel}; run /setup-languages first.`);
+  }
+
+  let translated;
+  if (language.code === "en") {
+    translated = originalText;
+  } else if (language.code === "ar-qa") {
+    translated = await translateQatariArabic(originalText);
+  } else {
+    translated = await translateText(originalText, language.code);
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0xD4AF37)
+    .setTitle(`${language.flag} THE OUTCASTS | ANNOUNCEMENT`)
+    .setDescription(translated.length > 4096 ? `${translated.slice(0, 4090)}…` : translated)
+    .setFooter({ text: `THE OUTCASTS • ${language.name.toUpperCase()}` })
+    .setTimestamp();
+
+  await channel.send({ embeds: [embed] });
+  return { language, channel };
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName("setup-languages")
@@ -279,6 +314,19 @@ const commands = [
   new SlashCommandBuilder()
     .setName("announce")
     .setDescription("Translate and publish an announcement to all language channels")
+    .addStringOption(option => option.setName("message")
+      .setDescription("Write the announcement in English")
+      .setRequired(true).setMaxLength(3500)),
+  new SlashCommandBuilder()
+    .setName("announce-one")
+    .setDescription("Translate and post an announcement in just one language channel")
+    .addStringOption(option => option.setName("language")
+      .setDescription("Choose the one language channel to post in")
+      .setRequired(true)
+      .addChoices(...LANGUAGES.map(language => ({
+        name: `${language.flag} ${language.name}`,
+        value: language.code
+      }))))
     .addStringOption(option => option.setName("message")
       .setDescription("Write the announcement in English")
       .setRequired(true).setMaxLength(3500))
@@ -289,7 +337,7 @@ client.once(Events.ClientReady, async readyClient => {
   try {
     const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("Registered /setup-languages and /announce.");
+    console.log("Registered /setup-languages, /announce and /announce-one.");
   } catch (error) {
     console.error("Slash-command registration failed:", error);
   }
@@ -322,6 +370,18 @@ client.on(Events.InteractionCreate, async interaction => {
         let reply = `📢 Announcement delivery finished: **${posted}/${LANGUAGES.length}** languages posted.`;
         if (failed.length) reply += `\n⚠️ Could not post: ${failed.join(", ")}. Check Railway logs and LibreTranslate settings.`;
         return interaction.editReply(reply);
+      }
+
+      if (interaction.commandName === "announce-one") {
+        const languageCode = interaction.options.getString("language", true);
+        const message = interaction.options.getString("message", true).trim();
+        if (!message) return interaction.reply({ content: "Please enter an announcement.", ephemeral: true });
+
+        await interaction.deferReply({ ephemeral: true });
+        const { language, channel } = await publishSingleLanguage(interaction.guild, languageCode, message);
+        return interaction.editReply(
+          `✅ Announcement translated and posted in ${language.flag} **${language.name}**: <#${channel.id}>.`
+        );
       }
     }
 
