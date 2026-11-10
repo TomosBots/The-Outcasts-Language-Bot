@@ -130,6 +130,41 @@ async function findOrCreateTextChannel(guild, name, category, overwrites) {
   return channel;
 }
 
+// Create only the requested language's role and private channel.
+async function addOneLanguage(guild, languageCode) {
+  const language = LANGUAGES.find(item => item.code === languageCode);
+  if (!language) throw new Error("Unsupported language.");
+  await guild.roles.fetch();
+  await guild.channels.fetch();
+  const botMember = await guild.members.fetchMe();
+  const required = [PermissionFlagsBits.ManageRoles, PermissionFlagsBits.ManageChannels,
+    PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+  if (required.some(permission => !botMember.permissions.has(permission))) {
+    throw new Error("Bot needs Manage Roles, Manage Channels, View Channel, Send Messages and Embed Links.");
+  }
+  const category = await findOrCreateCategory(guild, botMember);
+  const role = await findOrCreateRole(guild, language);
+  const overwrites = [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: role.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] },
+    { id: botMember.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory] },
+    ...staffOverwrites(guild)
+  ];
+  // Do not touch existing channels: only create if absent.
+  let channel = guild.channels.cache.find(item =>
+    item.type === ChannelType.GuildText && item.name === language.channel);
+  const alreadyExisted = Boolean(channel);
+  if (!channel) {
+    channel = await guild.channels.create({
+      name: language.channel, type: ChannelType.GuildText,
+      parent: category.id, permissionOverwrites: overwrites,
+      reason: `Add ${language.name} announcement channel`
+    });
+  }
+  return { language, channel, role, alreadyExisted };
+}
+
 async function setupLanguages(guild) {
   const botMember = await guild.members.fetchMe();
   const needed = [
@@ -318,6 +353,15 @@ const commands = [
       .setDescription("Write the announcement in English")
       .setRequired(true).setMaxLength(3500)),
   new SlashCommandBuilder()
+    .setName("add-language")
+    .setDescription("Create only one language announcement channel and its role")
+    .addStringOption(option => option.setName("language")
+      .setDescription("Language channel to create")
+      .setRequired(true)
+      .addChoices(...LANGUAGES.map(language => ({
+        name: `${language.flag} ${language.name}`, value: language.code
+      })))),
+  new SlashCommandBuilder()
     .setName("announce-one")
     .setDescription("Translate and post an announcement in just one language channel")
     .addStringOption(option => option.setName("language")
@@ -337,7 +381,7 @@ client.once(Events.ClientReady, async readyClient => {
   try {
     const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("Registered /setup-languages, /announce and /announce-one.");
+    console.log("Registered /setup-languages, /add-language, /announce and /announce-one.");
   } catch (error) {
     console.error("Slash-command registration failed:", error);
   }
@@ -370,6 +414,17 @@ client.on(Events.InteractionCreate, async interaction => {
         let reply = `📢 Announcement delivery finished: **${posted}/${LANGUAGES.length}** languages posted.`;
         if (failed.length) reply += `\n⚠️ Could not post: ${failed.join(", ")}. Check Railway logs and LibreTranslate settings.`;
         return interaction.editReply(reply);
+      }
+
+      if (interaction.commandName === "add-language") {
+        const languageCode = interaction.options.getString("language", true);
+        await interaction.deferReply({ ephemeral: true });
+        const { language, channel, alreadyExisted } =
+          await addOneLanguage(interaction.guild, languageCode);
+        return interaction.editReply(
+          `${alreadyExisted ? "ℹ️ Already exists" : "✅ Created"}: ${language.flag} <#${channel.id}>` +
+          ` with the **Language • ${language.name}** role. No other channels were changed.`
+        );
       }
 
       if (interaction.commandName === "announce-one") {
