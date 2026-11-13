@@ -11,8 +11,6 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const LIBRETRANSLATE_URL = (process.env.LIBRETRANSLATE_URL || "").replace(/\/+$/, "");
 const LIBRETRANSLATE_API_KEY = process.env.LIBRETRANSLATE_API_KEY || "";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
 
 if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
   console.error("Missing DISCORD_TOKEN, CLIENT_ID or GUILD_ID in Railway variables.");
@@ -27,7 +25,6 @@ const LANGUAGE_MENU_ID = "outcasts_language_select";
 const LANGUAGES = [
   { code: "en", name: "English", flag: "🇬🇧", channel: "announcements-english" },
   { code: "ar", name: "Arabic (Standard)", flag: "🇸🇦", channel: "announcements-arabic" },
-  { code: "ar-qa", name: "Qatari Arabic", flag: "🇶🇦", channel: "announcements-qatari" },
   { code: "ru", name: "Russian", flag: "🇷🇺", channel: "announcements-russian" },
   { code: "it", name: "Italian", flag: "🇮🇹", channel: "announcements-italian" },
   { code: "tr", name: "Turkish", flag: "🇹🇷", channel: "announcements-turkish" },
@@ -230,50 +227,6 @@ async function translateText(text, target) {
   return result.translatedText;
 }
 
-async function translateQatariArabic(text) {
-  if (!OPENAI_API_KEY) {
-    throw new Error("Set OPENAI_API_KEY in Railway variables to enable Qatari Arabic.");
-  }
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${OPENAI_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are a professional English-to-Qatari Arabic translator.",
-            "Translate the supplied English announcement into natural, conversational Qatari Arabic as spoken by people in Qatar.",
-            "Use authentic everyday Qatari/Gulf wording and expressions where they fit naturally; do not use stiff Modern Standard Arabic.",
-            "Keep the meaning, names, dates, times, amounts, URLs, Discord commands, and important instructions accurate.",
-            "Do not add explanations, introductions, quotation marks, or alternative translations.",
-            "Return only the translated Arabic text, written in Arabic script.",
-            "Keep the tone friendly and suitable for a Discord community announcement."
-          ].join(" ")
-        },
-        { role: "user", content: text }
-      ]
-    }),
-    signal: AbortSignal.timeout(45000)
-  });
-
-  if (!response.ok) {
-    const details = await response.text().catch(() => "");
-    throw new Error(`OpenAI API HTTP ${response.status}: ${details.slice(0, 300)}`);
-  }
-
-  const result = await response.json();
-  const translated = result.choices?.[0]?.message?.content?.trim();
-  if (!translated) throw new Error("OpenAI returned no Qatari Arabic translation.");
-  return translated;
-}
-
 async function publishAnnouncement(guild, originalText) {
   await guild.channels.fetch();
   const results = [];
@@ -286,8 +239,6 @@ async function publishAnnouncement(guild, originalText) {
       let translated;
       if (language.code === "en") {
         translated = originalText;
-      } else if (language.code === "ar-qa") {
-        translated = await translateQatariArabic(originalText);
       } else {
         translated = await translateText(originalText, language.code);
       }
@@ -325,8 +276,6 @@ async function publishSingleLanguage(guild, languageCode, originalText) {
   let translated;
   if (language.code === "en") {
     translated = originalText;
-  } else if (language.code === "ar-qa") {
-    translated = await translateQatariArabic(originalText);
   } else {
     translated = await translateText(originalText, language.code);
   }
